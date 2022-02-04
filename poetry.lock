@@ -304,6 +304,7 @@ python-versions = ">=3.6"
 
 [extras]
 vpf = []
+vpf-dev = ["pycuda"]
 vpf-pytorch = ["torch", "pycuda", "torchvision"]
 vpf-tensorrt = ["torch", "pycuda", "torchvision", "nvidia-pyindex", "nvidia-tensorrt"]
 

@@ -7,7 +7,7 @@ all: vpf_built
 
 vpf_built:
 	mkdir -p build && cd build && \
-  cmake -D VIDEO_CODEC_SDK_INCLUDE_DIR=$(VIDEO_CODEC_SDK)/Interface \
+  cmake -D VIDEO_CODEC_SDK_INCLUDE_DIR=$(VIDEO_CODEC_SDK)/include \
 	  -D NVCUVID_LIBRARY=$(VIDEO_CODEC_SDK)/Lib/linux/stubs/x86_64/libnvcuvid.so \
 	  -D NVENCODE_LIBRARY=$(VIDEO_CODEC_SDK)/Lib/linux/stubs/x86_64/libnvidia-encode.so \
 	  -D CMAKE_INSTALL_PREFIX=../dist \

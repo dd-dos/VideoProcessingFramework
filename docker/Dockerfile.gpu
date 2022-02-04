@@ -31,10 +31,13 @@ COPY poetry.lock poetry.lock
 COPY pyproject.toml pyproject.toml
 
 # Build poetry virtual environment
-RUN if [ "$GEN_PYTORCH_EXT" = "1" ] ; then make -f docker/Makefile build_env EXTRAS=vpf-pytorch ; else make -f docker/Makefile build_env EXTRAS=vpf ; fi
+# RUN if [ "$GEN_PYTORCH_EXT" = "1" ] ; then make -f docker/Makefile build_env EXTRAS=vpf-pytorch ; else make -f docker/Makefile build_env EXTRAS=vpf ; fi
+RUN if [ "$GEN_PYTORCH_EXT" = "1" ] ; then make -f docker/Makefile build_env EXTRAS=vpf-dev ; else make -f docker/Makefile build_env EXTRAS=vpf ; fi
 
 # Build vpf
 COPY . .
+
+RUN pip install -r requirements.txt
 
 RUN make -f docker/Makefile vpf_built \
                             PYTHON_BINARY=$PYTHON_BINARY \
@@ -68,5 +71,7 @@ ENV POETRY_HOME="/opt/poetry"
 ENV PATH="/opt/.venv/bin:$POETRY_HOME/bin:$PATH" \
     LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/opt/dist:/opt/dist/bin:/opt/.venv/lib/python3.8/site-packages/torch/lib" \
     PYTHONPATH=/opt/.venv/bin:/opt/dist:/opt/dist/bin
+
+WORKDIR /app
 
 ENTRYPOINT ["/bin/bash"]
