@@ -45,6 +45,7 @@ import PyNvCodec as nvc
 import numpy as np
 
 from threading import Thread
+import time
 
 class Worker(Thread):
     def __init__(self, gpuID, encFile):
@@ -93,7 +94,9 @@ class Worker(Thread):
         try:
             while True:
                 try:
+                    st = time.time()
                     self.rawSurface = self.nvDec.DecodeSingleSurface()
+                    print(f"Get raw surface: {(time.time() - st)*1000} ms")
                     if (self.rawSurface.Empty()):
                         print('No more video frames')
                         break
@@ -121,9 +124,9 @@ class Worker(Thread):
                     print('Failed to download surface')
                     break
  
-                self.num_frame += 1
-                if(0 == self.num_frame % self.nvDec.Framerate()):
-                    print(self.num_frame)
+                # self.num_frame += 1
+                # if(0 == self.num_frame % self.nvDec.Framerate()):
+                #     print(self.num_frame)
  
         except Exception as e:
             print(getattr(e, 'message', str(e)))
@@ -149,12 +152,15 @@ if __name__ == "__main__":
     print('This sample may serve as a stability test.')
     print('Usage: python SampleDecodeMultiThread.py $gpu_id $input $num_threads')
  
-    if(len(sys.argv) < 4):
-        print("Provide input CLI arguments as shown above")
-        exit(1)
+    # if(len(sys.argv) < 4):
+    #     print("Provide input CLI arguments as shown above")
+    #     exit(1)
  
-    gpu_id = int(sys.argv[1])
-    input_file = sys.argv[2]
-    num_threads = int(sys.argv[3])
+    # gpu_id = int(sys.argv[1])
+    # input_file = sys.argv[2]
+    # num_threads = int(sys.argv[3])
+    gpu_id = 0
+    input_file = "rtsp://admin:Techainer123@192.168.50.4/Streaming/Channels/101"
+    num_threads = 1
  
     create_threads(gpu_id, input_file, num_threads)

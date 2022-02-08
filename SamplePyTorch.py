@@ -17,6 +17,7 @@
 
 # Starting from Python 3.8 DLL search policy has changed.
 # We need to add path to CUDA DLLs explicitly.
+import time
 import sys
 import os
 
@@ -78,7 +79,9 @@ def main(gpuID, encFilePath, dstFilePath):
                                  device=torch.device(f'cuda:{gpuID}'))
 
     while True:
+        st = time.time()
         rawSurface = nvDec.DecodeSingleSurface()
+        print("Decode time: ", (time.time() - st)*1000)
         if rawSurface.Empty():
             break
 
@@ -119,11 +122,15 @@ if __name__ == "__main__":
     print("This sample transcode and process with pytorch an input video on given GPU.")
     print("Usage: SamplePyTorch.py $gpu_id $input_file $output_file.")
 
-    if(len(sys.argv) < 4):
-        print("Provide gpu ID, path to input and output files")
-        exit(1)
+    # if(len(sys.argv) < 4):
+    #     print("Provide gpu ID, path to input and output files")
+    #     exit(1)
 
-    gpuID = int(sys.argv[1])
-    encFilePath = sys.argv[2]
-    decFilePath = sys.argv[3]
+    # gpuID = int(sys.argv[1])
+    # encFilePath = sys.argv[2]
+    # decFilePath = sys.argv[3]
+
+    gpuID = 0
+    encFilePath = "rtsp://admin:Techainer123@192.168.50.4/Streaming/Channels/101"
+    decFilePath = "bikes_out.mp4"
     main(gpuID, encFilePath, decFilePath)
