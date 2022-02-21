@@ -1,3 +1,4 @@
 *.mp4
 Video_Codec_SDK*
 frames/*
+*.pyc
