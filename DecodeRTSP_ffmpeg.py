@@ -1,26 +1,24 @@
-#
-# Copyright 2019 NVIDIA Corporation
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-
-# Starting from Python 3.8 DLL search policy has changed.
-# We need to add path to CUDA DLLs explicitly.
-import multiprocessing
-import sys
+import json
 import os
-import threading
+import subprocess
+import sys
+import time
+import traceback
+import uuid
+from collections import deque
+from io import BytesIO
+from multiprocessing import Process
+from threading import Thread
 from typing import Dict
+
+import cv2
+import numpy as np
+import pycuda.driver as cuda
+import torch
+from loguru import logger
+
+import PyNvCodec as nvc
+from streaming import JanusClient
 
 if os.name == 'nt':
     # Add CUDA_PATH env variable
@@ -42,18 +40,6 @@ if os.name == 'nt':
     else:
         print("PATH environment variable is not set.", file=sys.stderr)
         exit(1)
-
-import PyNvCodec as nvc
-import numpy as np
-
-from io import BytesIO
-from multiprocessing import Process
-import subprocess
-import uuid
-import json
-import time
-import torch
-import cv2
 
 def get_stream_params(url: str) -> Dict:
     cmd = [
@@ -130,8 +116,20 @@ def get_stream_params(url: str) -> Dict:
                 return params
     return {}
 
+def rtsp_client(url: str, name: str, gpuID: int, frame_deque: deque) -> None:
+    try:
+        janus_client = JanusClient(
+            janus_server_url="http://192.168.40.5:30888/janus",
+            # ice_server_url="turn:janus.truongkyle.tech:3478?transport=udp",
+            # ice_server_username="horus",
+            # ice_server_password="horus123@!",
+            frame_dequeue=frame_deque,
+            cam_id=666,
+        )
+    except:
+        logger.error(f"Error connecting to Janus: {traceback.format_exc()}")
+        sys.exit(1)
 
-def rtsp_client(url: str, name: str, gpu_id: int) -> None:
     # Get stream parameters
     params = get_stream_params(url)
 
@@ -142,7 +140,7 @@ def rtsp_client(url: str, name: str, gpu_id: int) -> None:
     h = params['height']
     f = params['format']
     c = params['codec']
-    g = gpu_id
+    g = gpuID
 
     # Prepare ffmpeg arguments
     if nvc.CudaVideoCodec.H264 == c:
@@ -150,7 +148,7 @@ def rtsp_client(url: str, name: str, gpu_id: int) -> None:
     elif nvc.CudaVideoCodec.HEVC == c:
         codec_name = 'hevc'
     bsf_name = codec_name + '_mp4toannexb,dump_extra=all'
-
+    
     cmd = [
         'ffmpeg',       '-hide_banner',
         '-i',           url,
@@ -171,10 +169,6 @@ def rtsp_client(url: str, name: str, gpu_id: int) -> None:
     rt = 0
     fd = 0
 
-    # Main decoding loop, will not flush intentionally because don't know the
-    # amount of frames available via RTSP.
-
-    # Stream convert goes here
     width, height = w, h
 
     # Initialize colorspace conversion chain
@@ -188,7 +182,6 @@ def rtsp_client(url: str, name: str, gpu_id: int) -> None:
     else:
         nvCvt = nvc.PySurfaceConverter(width, height, nvdec.Format(), nvc.PixelFormat.RGB, gpuID)
     
-    num_frame = 0
     surface_tensor = torch.zeros(height, width, 3, dtype=torch.uint8,
                                 device=torch.device(f'cuda:{gpuID}'))
 
@@ -199,74 +192,83 @@ def rtsp_client(url: str, name: str, gpu_id: int) -> None:
         crange = nvc.ColorRange.MPEG
     cc_ctx = nvc.ColorspaceConversionContext(cspace, crange)
 
+    st_all = time.time()
     while True:
-        # Pipe read underflow protection
-        if not read_size:
-            read_size = int(rt / fd)
-            # Counter overflow protection
-            rt = read_size
-            fd = 1
-
-        # Read data.
-        # Amount doesn't really matter, will be updated later on during decode.
-        bits = proc.stdout.read(read_size)
-        if not len(bits):
-            print("Can't read data from pipe")
-            break
-        else:
-            rt += len(bits)
-
-        # Decode
-        enc_packet = np.frombuffer(buffer=bits, dtype=np.uint8)
-        pkt_data = nvc.PacketData()
         try:
-            st_0 = time.time()
-            surf = nvdec.DecodeSurfaceFromPacket(enc_packet, pkt_data)
+            # Pipe read underflow protection
+            if not read_size:
+                read_size = int(rt / fd)
+                # Counter overflow protection
+                rt = read_size
+                fd = 1
 
-            if not surf.Empty():
-                fd += 1
-                # Shifts towards underflow to avoid increasing vRAM consumption.
-                if pkt_data.bsl < read_size:
-                    read_size = pkt_data.bsl
-                # Print process ID every second or so.
-                fps = int(params['framerate'])
-                if not fd % fps:
-                    print(name)
+            # Read data.
+            # Amount doesn't really matter, will be updated later on during decode.
+            # st = time.time()
+            bits = proc.stdout.read(read_size)
+            # logger.debug(f"Read bits from pipe took {(time.time() - st)*1000} ms")
+            if not len(bits):
+                print("Can't read data from pipe")
+                break
+            else:
+                rt += len(bits)
 
-                if nvYuv:
-                    st_1 = time.time()
-                    yuvSurface = nvYuv.Execute(surf, cc_ctx)
-                    cvtSurface = nvCvt.Execute(yuvSurface, cc_ctx)
-                    print(f"Convert to RGB: {(time.time() - st_1)*1000} ms")
-                else:
-                    st_1 = time.time()
-                    cvtSurface = nvCvt.Execute(surf, cc_ctx)
-                    print(f"Convert to RGB: {(time.time() - st_1)*1000} ms")
+            # Decode
+            # st = time.time()
+            enc_packet = np.frombuffer(buffer=bits, dtype=np.uint8)
+            pkt_data = nvc.PacketData()
+            # logger.debug(f"Decode package data took {(time.time() - st)*1000} ms")
+            try:
+                # st = time.time()
+                surf = nvdec.DecodeSurfaceFromPacket(enc_packet, pkt_data)
+                # surf = nvdec.DecodeSingleSurface()
+                # logger.debug(f"Decode surface took {(time.time() - st)*1000} ms")
 
-                st_2 = time.time()
-                cvtSurface.PlanePtr().Export(surface_tensor.data_ptr(), width*3, gpuID)
-                print(f"Export to tensor: {(time.time() - st_2)*1000} ms")
-                print(f"Decode single frame took: {(time.time()-st_0)*1000} ms")
-                print(f"##############################################################################")
-                name = np.mod(num_frame, 300)
-                img = cv2.cvtColor(surface_tensor.cpu().numpy(), cv2.COLOR_RGB2BGR)
-                cv2.imwrite(f"frames/{name}.jpg", img)
-                num_frame += 1
+                if not surf.Empty():
+                    fd += 1
+                    # Shifts towards underflow to avoid increasing vRAM consumption.
+                    if pkt_data.bsl < read_size:
+                        read_size = pkt_data.bsl
 
-        # Handle HW exceptions in simplest possible way by decoder respawn
-        except nvc.HwResetException:
-            nvdec = nvc.PyNvDecoder(w, h, f, c, g)
-            continue
+                    # st = time.time()
+                    if nvYuv:
+                        yuvSurface = nvYuv.Execute(surf, cc_ctx)
+                        cvtSurface = nvCvt.Execute(yuvSurface, cc_ctx)
+                    else:
+                        cvtSurface = nvCvt.Execute(surf, cc_ctx)
+                    # logger.debug(f"Convert surface took {(time.time() - st)*1000} ms")
+
+                    # st = time.time()
+                    cvtSurface.PlanePtr().Export(surface_tensor.data_ptr(), width*3, gpuID)
+                    # logger.debug(f"Export surface took {(time.time() - st)*1000} ms")
+
+                    # logger.debug(f"Whole decoding flow took {(time.time() - st_all)*1000} ms")
+                    logger.debug(f"Framerate: {fd/(time.time() - st_all)}")
+
+                    img = cv2.cvtColor(surface_tensor.cpu().numpy(), cv2.COLOR_RGB2BGR)
+                    frame_deque.appendleft(img)
+
+            # Handle HW exceptions in simplest possible way by decoder respawn
+            except nvc.HwResetException:
+                st = time.time()
+                nvdec = nvc.PyNvDecoder(w, h, f, c, g)
+                logger.warning(f"HW reset: reset time = {(time.time() - st)*1000} ms")
+                continue
+        except KeyboardInterrupt:
+            logger.info("Keyboard interrupt")
+            janus_client.stop()
+            return
 
 
 if __name__ == "__main__":
     print("This sample decodes multiple videos in parallel on given GPU.")
-    print("It doesn't do anything beside decoding, output isn't saved.")
+    print("Input rtsp stream will be decoded to np.array.")
     print("Usage: SampleDecodeRTSP.py $gpu_id $url1 ... $urlN .")
 
     if(len(sys.argv) < 3):
-        print("Provide gpu ID and input URL(s).")
-        exit(1)
+        sys.argv.append(0)
+        # sys.argv.append("rtsp://admin:Techainer123@192.168.50.5:554/media/video1")
+        sys.argv.append("rtsp://admin:Techainer123@techainer-hikvision-office-2:554/media/video1")
 
     gpuID = int(sys.argv[1])
     urls = []
@@ -274,12 +276,19 @@ if __name__ == "__main__":
     for i in range(2, len(sys.argv)):
         urls.append(sys.argv[i])
 
+    # urls = urls * 4
+
     pool = []
-    for url in urls:
-        client = Process(target=rtsp_client, args=(
-            url, str(uuid.uuid4()), gpuID))
+    for idx, url in enumerate(urls):
+        frame_deque = deque(maxlen=10)
+        client = Thread(target=rtsp_client, args=(
+                url, str(idx), gpuID, frame_deque
+            )
+        )
         client.start()
         pool.append(client)
 
     for client in pool:
         client.join()
+
+    
