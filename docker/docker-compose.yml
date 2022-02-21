@@ -13,6 +13,7 @@ services:
     image: nvidia/videoprocessingframework:vpf
     environment:
       - NVIDIA_DRIVER_CAPABILITIES=video,compute,utility
+    network_mode: host
 
   vpf-tensorrt:
     build:
