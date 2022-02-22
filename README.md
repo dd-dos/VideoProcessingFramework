@@ -20,7 +20,7 @@ sh scripts/run.sh
 ```
 
 ## Testing
-You have to host a Janus server first. Don't know what it is? Why so weak?
+You have to host a Janus server first (to stream using WebRTC).
 - Decode rtsp stream using ffmpeg. Reconfig `DecodeRTSP_ffmpeg.py` if needed:
 ```
 python DecodeRTSP_ffmpeg.py
