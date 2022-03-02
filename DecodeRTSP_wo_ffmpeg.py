@@ -21,6 +21,7 @@
 #         print("PATH environment variable is not set.", file = sys.stderr)
 #         exit(1)
 
+from concurrent.futures import thread
 import time
 from collections import deque
 from threading import Thread
@@ -33,7 +34,8 @@ import PyNvCodec as nvc
 from streaming import JanusClient
 
 
-def main(gpuID, encFilePath):
+def main(gpuID, encFilePath, camID):
+    st_main = time.time()
     nvDec = nvc.PyNvDecoder(encFilePath, gpuID)
 
     width = nvDec.Width()
@@ -61,15 +63,18 @@ def main(gpuID, encFilePath):
                                  device=torch.device(f'cuda:{gpuID}'))
 
     # Initialize Janus client
-    frame_deque = deque(maxlen=10)
-    janus_client = JanusClient(
-        janus_server_url="http://192.168.40.5:30888/janus",
-        # ice_server_url="turn:janus.truongkyle.tech:3478?transport=udp",
-        # ice_server_username="horus",
-        # ice_server_password="horus123@!",
-        frame_dequeue=frame_deque,
-        cam_id=666,
-    )
+    logger.info(f"Decoder init time: {(time.time()-st_main)*1000} ms")
+    frame_deque = deque(maxlen=2)
+    st_janus = time.time()
+    # janus_client = JanusClient(
+    #     janus_server_url="http://192.168.40.4:8088/janus",
+    #     # ice_server_url="turn:janus.truongkyle.tech:3478?transport=udp",
+    #     # ice_server_username="horus",
+    #     # ice_server_password="horus123@!",
+    #     frame_dequeue=frame_deque,
+    #     cam_id=camID,
+    # )
+    # logger.info(f"Janus client init time: {(time.time()-st_janus)*1000} ms")
 
     decoded_frame = 0
     st = time.time()
@@ -93,22 +98,28 @@ def main(gpuID, encFilePath):
                 cvtSurface = nvCvt.Execute(nv12_surface, cc_ctx)
 
             cvtSurface.PlanePtr().Export(surface_tensor.data_ptr(), width * 3, gpuID)
-            logger.debug(f"Framerate: {decoded_frame / (time.time() - st)}")
+            # logger.debug(f"Framerate: {decoded_frame / (time.time() - st)}")
             
             # This should be a typical rgb image but idk why it's a bgr one??
-            bgr_img = surface_tensor.cpu().numpy()
-            rgb_img = bgr_img[..., ::-1] 
+            # bgr_img = surface_tensor.cpu().numpy()
+            # rgb_img = bgr_img[..., ::-1] 
 
-            frame_deque.appendleft(rgb_img)
+            frame_deque.appendleft(surface_tensor)
         except KeyboardInterrupt:
-            janus_client.stop()
+            # janus_client.stop()
             return
 
 if __name__ == "__main__":
     gpuID = 0
     encFilePath = "rtsp://admin:Techainer123@techainer-hikvision-office-2:554/media/video1"
+    
+    thread_list = []
+    for idx in range(1):
+        main_thread = Thread(target=main, args=(gpuID, encFilePath, idx))
+        main_thread.start()
+        thread_list.append(main_thread)
+        logger.info(f"Init camera {idx}")
 
-    main_thread = Process(target=main, args=(gpuID, encFilePath))
-    main_thread.start()
-    main_thread.join()
+    for _thread in thread_list:
+        _thread.join()
     logger.info(f"All clean")
