@@ -22,6 +22,7 @@
 #         exit(1)
 
 from concurrent.futures import thread
+from re import I
 import time
 from collections import deque
 from threading import Thread
@@ -59,29 +60,30 @@ def main(gpuID, encFilePath, camID):
         nvCvt = nvc.PySurfaceConverter(width, height, nvDec.Format(), nvc.PixelFormat.RGB, gpuID)
 
     # PyTorch tensor the VPF Surfaces will be exported to
-    surface_tensor = torch.zeros(height, width, 3, dtype=torch.uint8,
-                                 device=torch.device(f'cuda:{gpuID}'))
 
     # Initialize Janus client
     logger.info(f"Decoder init time: {(time.time()-st_main)*1000} ms")
     frame_deque = deque(maxlen=2)
     st_janus = time.time()
-    # janus_client = JanusClient(
-    #     janus_server_url="http://192.168.40.4:8088/janus",
-    #     # ice_server_url="turn:janus.truongkyle.tech:3478?transport=udp",
-    #     # ice_server_username="horus",
-    #     # ice_server_password="horus123@!",
-    #     frame_dequeue=frame_deque,
-    #     cam_id=camID,
-    # )
+    janus_client = JanusClient(
+        janus_server_url="http://192.168.40.3:8088/janus",
+        # ice_server_url="turn:janus.truongkyle.tech:3478?transport=udp",
+        # ice_server_username="horus",
+        # ice_server_password="horus123@!",
+        frame_dequeue=frame_deque,
+        cam_id=camID,
+    )
     # logger.info(f"Janus client init time: {(time.time()-st_janus)*1000} ms")
 
     decoded_frame = 0
-    st = time.time()
     while True:
         try:
             try:
+                logger.debug(f"#"*30)
+                st = time.time()
                 nv12_surface = nvDec.DecodeSingleSurface()
+                import ipdb; ipdb.set_trace(context=10)
+                logger.debug(f"Decode single surface took: {(time.time()-st)*1000} ms")
             except nvc.HwResetException:
                 logger.warning("Hardware reset detected. Trying to recover...")
                 continue
@@ -91,22 +93,33 @@ def main(gpuID, encFilePath, camID):
                 break
             
             decoded_frame += 1
+            st = time.time()
             if nvYuv:
                 yuvSurface = nvYuv.Execute(nv12_surface, cc_ctx)
                 cvtSurface = nvCvt.Execute(yuvSurface, cc_ctx)
             else:
                 cvtSurface = nvCvt.Execute(nv12_surface, cc_ctx)
+            logger.debug(f"Conversion took: {(time.time()-st)*1000} ms")
 
+            st = time.time()
+            surface_tensor = torch.zeros(height, width, 3, dtype=torch.uint8,
+                                        device=torch.device(f'cuda:{gpuID}'))
+            logger.debug(f"Tensor init took: {(time.time()-st)*1000} ms")
+
+            st = time.time()
             cvtSurface.PlanePtr().Export(surface_tensor.data_ptr(), width * 3, gpuID)
             # logger.debug(f"Framerate: {decoded_frame / (time.time() - st)}")
-            
-            # This should be a typical rgb image but idk why it's a bgr one??
-            # bgr_img = surface_tensor.cpu().numpy()
-            # rgb_img = bgr_img[..., ::-1] 
+            logger.debug(f"Export took: {(time.time()-st)*1000} ms")
 
-            frame_deque.appendleft(surface_tensor)
+            # This should be a typical rgb image but idk why it's a bgr one??
+            st = time.time()
+            bgr_img = surface_tensor.cpu().numpy()
+            rgb_img = bgr_img[..., ::-1]
+            logger.debug(f"Numpy conversion took: {(time.time()-st)*1000} ms")
+
+            frame_deque.appendleft(rgb_img)
         except KeyboardInterrupt:
-            # janus_client.stop()
+            janus_client.stop()
             return
 
 if __name__ == "__main__":
@@ -114,11 +127,13 @@ if __name__ == "__main__":
     encFilePath = "rtsp://admin:Techainer123@techainer-hikvision-office-2:554/media/video1"
     
     thread_list = []
-    for idx in range(1):
+    for idx in range(4):
         main_thread = Thread(target=main, args=(gpuID, encFilePath, idx))
+        # main_thread = Process(target=main, args=(gpuID, encFilePath, idx))
         main_thread.start()
         thread_list.append(main_thread)
         logger.info(f"Init camera {idx}")
+    # main(gpuID, encFilePath, 0)
 
     for _thread in thread_list:
         _thread.join()

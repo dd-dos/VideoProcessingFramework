@@ -43,6 +43,9 @@ if os.name == 'nt':
 import pycuda.driver as cuda
 import PyNvCodec as nvc
 import numpy as np
+import cv2
+import torch
+from loguru import logger
 
 from threading import Thread
 import time
@@ -51,16 +54,20 @@ class Worker(Thread):
     def __init__(self, gpuID, encFile):
         Thread.__init__(self)
 
+        st = time.time()
         # Retain primary CUDA device context and create separate stream per thread.
         self.ctx = cuda.Device(gpuID).retain_primary_context()
         self.ctx.push()
         self.str = cuda.Stream()
         self.ctx.pop()
+        logger.info(f"Init ctx and stream time: {(time.time() - st)*1000} ms")
 
         # Create Decoder with given CUDA context & stream.
         self.nvDec = nvc.PyNvDecoder(encFile, self.ctx.handle, self.str.handle)
         
         width, height = self.nvDec.Width(), self.nvDec.Height()
+        self.width = width
+        self.height = height
         hwidth, hheight = int(width / 2), int(height / 2)
 
         # Determine colorspace conversion parameters.
@@ -86,51 +93,41 @@ class Worker(Thread):
         else:
             self.nvCvt = nvc.PySurfaceConverter(width, height, self.nvDec.Format(), nvc.PixelFormat.RGB, self.ctx.handle, self.str.handle)
 
-        self.nvRes = nvc.PySurfaceResizer(hwidth, hheight, self.nvCvt.Format(), self.ctx.handle, self.str.handle)
-        self.nvDwn = nvc.PySurfaceDownloader(hwidth, hheight, self.nvRes.Format(), self.ctx.handle, self.str.handle)
+        # self.nvRes = nvc.PySurfaceResizer(hwidth, hheight, self.nvCvt.Format(), self.ctx.handle, self.str.handle)
+        # self.nvDwn = nvc.PySurfaceDownloader(hwidth, hheight, self.nvRes.Format(), self.ctx.handle, self.str.handle)
         self.num_frame = 0
 
     def run(self):
-        try:
-            while True:
-                try:
-                    st = time.time()
-                    self.rawSurface = self.nvDec.DecodeSingleSurface()
-                    print(f"Get raw surface: {(time.time() - st)*1000} ms")
-                    if (self.rawSurface.Empty()):
-                        print('No more video frames')
-                        break
-                except nvc.HwResetException:
-                    print('Continue after HW decoder was reset')
-                    continue
- 
-                if self.nvYuv:
-                    self.yuvSurface = self.nvYuv.Execute(self.rawSurface, self.cc_ctx)
-                    self.cvtSurface = self.nvCvt.Execute(self.yuvSurface, self.cc_ctx)
-                else:
-                    self.cvtSurface = self.nvCvt.Execute(self.rawSurface, self.cc_ctx)
-                if (self.cvtSurface.Empty()):
-                    print('Failed to do color conversion')
+        while True:
+            try:
+                st = time.time()
+                self.rawSurface = self.nvDec.DecodeSingleSurface()
+                print(f"Get raw surface: {(time.time() - st)*1000} ms")
+                if (self.rawSurface.Empty()):
+                    print('No more video frames')
                     break
+            except Exception as e:
+                print(f'Exception: {e}')
+                continue
 
-                self.resSurface = self.nvRes.Execute(self.cvtSurface)
-                if (self.resSurface.Empty()):
-                    print('Failed to resize surface')
-                    break
- 
-                self.rawFrame = np.ndarray(shape=(self.resSurface.HostSize()), dtype=np.uint8)
-                success = self.nvDwn.DownloadSingleSurface(self.resSurface, self.rawFrame)
-                if not (success):
-                    print('Failed to download surface')
-                    break
- 
-                # self.num_frame += 1
-                # if(0 == self.num_frame % self.nvDec.Framerate()):
-                #     print(self.num_frame)
- 
-        except Exception as e:
-            print(getattr(e, 'message', str(e)))
-            fout.close()
+            if self.nvYuv:
+                self.yuvSurface = self.nvYuv.Execute(self.rawSurface, self.cc_ctx)
+                self.cvtSurface = self.nvCvt.Execute(self.yuvSurface, self.cc_ctx)
+            else:
+                self.cvtSurface = self.nvCvt.Execute(self.rawSurface, self.cc_ctx)
+            if (self.cvtSurface.Empty()):
+                print('Failed to do color conversion')
+                break
+
+            surface_tensor = torch.zeros(self.height, self.width, 3, dtype=torch.uint8,
+                        device=torch.device(f'cuda:0'))
+            self.cvtSurface.PlanePtr().Export(surface_tensor.data_ptr(), self.width * 3, 0)
+
+            # This should be a typical rgb image but idk why it's a bgr one??
+            st = time.time()
+            bgr_img = surface_tensor.cpu().numpy()
+            rgb_img = bgr_img[..., ::-1]
+            cv2.imwrite(f"frame.png", rgb_img)
  
 def create_threads(gpu_id, input_file, num_threads):
     cuda.init()

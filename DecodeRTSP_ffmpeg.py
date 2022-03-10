@@ -119,7 +119,7 @@ def get_stream_params(url: str) -> Dict:
 def rtsp_client(url: str, name: str, gpuID: int, frame_deque: deque) -> None:
     try:
         janus_client = JanusClient(
-            janus_server_url="http://192.168.40.5:30888/janus",
+            janus_server_url="http://192.168.40.3:8088/janus",
             # ice_server_url="turn:janus.truongkyle.tech:3478?transport=udp",
             # ice_server_username="horus",
             # ice_server_password="horus123@!",
@@ -243,7 +243,7 @@ def rtsp_client(url: str, name: str, gpuID: int, frame_deque: deque) -> None:
                     # logger.debug(f"Export surface took {(time.time() - st)*1000} ms")
 
                     # logger.debug(f"Whole decoding flow took {(time.time() - st_all)*1000} ms")
-                    logger.debug(f"Framerate: {fd/(time.time() - st_all)}")
+                    # logger.debug(f"Framerate: {fd/(time.time() - st_all)}")
 
                     img = cv2.cvtColor(surface_tensor.cpu().numpy(), cv2.COLOR_RGB2BGR)
                     frame_deque.appendleft(img)
@@ -276,7 +276,7 @@ if __name__ == "__main__":
     for i in range(2, len(sys.argv)):
         urls.append(sys.argv[i])
 
-    # urls = urls * 4
+    urls = urls * 4
 
     pool = []
     for idx, url in enumerate(urls):
